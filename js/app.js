@@ -1,0 +1,237 @@
+import { movimientosInsumosView } from "./movimientosInsumos.js";
+import { aplicacionesFitosanitariosView } from "./aplicacionesFitosanitarios.js";
+import { siembraView } from "./siembra.js";
+import { ordenesTrabajoView } from "./ordenesTrabajo.js";
+import { maestrosHubView } from "./maestrosHub.js";
+import { APP_CONFIG } from "./config.js";
+import { syncAll, pullAll, importarMaestros, contarPendientes } from "./sync.js";
+import { borrarTodoLocal } from "./db.js";
+
+// Esta empresa no usa Carga de Granos (a diferencia de las demás copias de
+// AppCampo, que tienen las 6 secciones completas).
+const routes = {
+  insumos: { view: movimientosInsumosView, label: "Insumos" },
+  fitosanitarios: { view: aplicacionesFitosanitariosView, label: "Fitosanitarios" },
+  siembra: { view: siembraView, label: "Siembra" },
+  ordenes: { view: ordenesTrabajoView, label: "Órdenes" },
+  maestros: { view: maestrosHubView, label: "Maestros" },
+};
+
+// Links por rol: cada uno oculta las pestañas que no le corresponden y abre
+// directo en la primera. "Maestros" queda visible para todos los roles
+// porque ahí se actualizan los datos base (lotes, insumos, etc.) desde Sheets.
+// Ejemplos de link para compartir: "https://.../?rol=siembra", "?rol=fitoinsumos".
+const ROLES = {
+  siembra: { rutas: ["siembra", "maestros"] },
+  fitoinsumos: { rutas: ["insumos", "fitosanitarios", "maestros"] },
+};
+const ROL_STORAGE_KEY = "appcampo_rol";
+
+function resolverRol() {
+  const rolUrl = new URLSearchParams(location.search).get("rol");
+  if (rolUrl === "todos") {
+    localStorage.removeItem(ROL_STORAGE_KEY);
+    return null;
+  }
+  if (rolUrl && ROLES[rolUrl]) {
+    localStorage.setItem(ROL_STORAGE_KEY, rolUrl);
+    return rolUrl;
+  }
+  const guardado = localStorage.getItem(ROL_STORAGE_KEY);
+  return ROLES[guardado] ? guardado : null;
+}
+
+// Si es null, no hay restricción (acceso completo, comportamiento de siempre).
+const rolActivo = resolverRol();
+const rutasPermitidas = rolActivo ? ROLES[rolActivo].rutas : null;
+
+const main = document.getElementById("main");
+const tabLinks = document.querySelectorAll("nav.tabbar a");
+if (rutasPermitidas) {
+  tabLinks.forEach((a) => {
+    if (!rutasPermitidas.includes(a.dataset.route)) a.classList.add("hidden");
+  });
+}
+
+async function updateSyncStatus() {
+  const el = document.getElementById("syncStatus");
+  if (!el || !APP_CONFIG.sheetsWebAppUrl) return;
+  el.classList.remove("hidden");
+  const pendientes = await contarPendientes();
+  if (pendientes === 0) {
+    el.textContent = "Todo sincronizado";
+    el.classList.add("ok");
+  } else {
+    el.textContent = `${pendientes} pendiente${pendientes === 1 ? "" : "s"} de sincronizar`;
+    el.classList.remove("ok");
+  }
+}
+
+// Reset remoto: el asesor lo dispara desde el menú "App de Campo" en la
+// Sheet (forzarResetTelefonos() en Code.gs), que sube un contador guardado
+// en la pestaña "Config". Ese contador viaja en la misma respuesta de
+// "leerMaestros" (ver importarMaestros() en sync.js); si es mayor al que
+// este teléfono tiene guardado, se borra toda la base local y se recarga —
+// así se puede forzar que todos los dispositivos "arranquen de cero" (ej.
+// después de borrar algo grande directo en la Sheet) sin pedirle a cada
+// uno que vaya a borrar el almacenamiento a mano desde Chrome. Se decide
+// DESPUÉS de importarMaestros() (que ya corrió syncAll() antes, así que
+// cualquier pendiente ya se subió); si todavía queda algo sin sincronizar
+// (sin conexión, por ejemplo), no borra nada y reintenta en el próximo
+// inicio, para no perder datos.
+const RESET_STORAGE_KEY = "appcampo_reset_version";
+
+async function verificarResetRemoto(versionObjetivo) {
+  // Sin nada guardado todavía (primera vez que corre este código en este
+  // teléfono) se toma como versión 0 — así un teléfono viejo que nunca supo
+  // de esto pero necesita el reset (resetVersion > 0) lo recibe en su
+  // primer load con esta versión, en vez de marcarse como "ya al día" sin
+  // haber borrado nada.
+  const versionGuardada = Number(localStorage.getItem(RESET_STORAGE_KEY)) || 0;
+  if (versionGuardada >= versionObjetivo) return false;
+
+  const pendientes = await contarPendientes();
+  if (pendientes > 0) {
+    console.warn("Reset remoto pendiente: hay registros sin sincronizar, se reintenta en el próximo inicio.");
+    return false;
+  }
+  await borrarTodoLocal();
+  localStorage.setItem(RESET_STORAGE_KEY, String(versionObjetivo));
+  return true;
+}
+
+async function runSync() {
+  await syncAll();
+  // Los maestros (Lotes/Silos/Corredores/etc.) se traen ANTES que pullAll():
+  // al traer una Carga de Granos, su origen se resuelve por NOMBRE contra los
+  // maestros locales (resolverIdPorNombre en sync.js) y, si no encuentra
+  // ninguno, crea uno "cascarón" vacío (sin cultivo, sin campaña) para no
+  // perder la referencia. En un dispositivo recién reseteado, si pullAll()
+  // corriera primero, esos cascarones se crean ANTES de que lleguen los
+  // maestros reales — y con Silos Bolsa (donde ahora el cultivo/campaña
+  // importan para no confundir pools) ese cascarón podía terminar como un
+  // duplicado suelto, sin ninguna carga apuntándolo. Trayendo los maestros
+  // primero, pullAll() ya encuentra el maestro real y no hace falta ningún
+  // cascarón.
+  const resultadoMaestros = await importarMaestros();
+  if (await verificarResetRemoto(resultadoMaestros.resetVersion || 0)) {
+    location.reload();
+    return;
+  }
+  await pullAll();
+  await updateSyncStatus();
+  // Refresca la vista actual por si trajo datos nuevos de otros dispositivos.
+  await router();
+}
+
+// Versión liviana: solo sube lo pendiente y actualiza el badge, sin traer datos
+// de otros dispositivos ni redibujar la pantalla (para no pisar un formulario
+// que el usuario ya empezó a llenar de nuevo). Se dispara justo después de
+// guardar cualquier registro, además del sync completo en reconexión/apertura.
+async function syncNow() {
+  await syncAll();
+  await updateSyncStatus();
+}
+
+window.addEventListener("appcampo-sync-now", syncNow);
+
+// Evita que dos llamadas a router() se pisen entre sí (por ejemplo, el render
+// inicial de la app y el que dispara runSync() al terminar de sincronizar):
+// sin esto, un render a medio terminar puede terminar enganchando sus
+// listeners a los elementos del OTRO render, duplicando comportamiento
+// (ej: un <select> que se termina poblando dos veces).
+let routerEnCurso = false;
+let routerPendiente = false;
+
+async function router() {
+  if (routerEnCurso) {
+    routerPendiente = true;
+    return;
+  }
+  routerEnCurso = true;
+  try {
+    const hashRaw = (location.hash || "").replace("#", "");
+    const [mainKeyRaw, subKey] = hashRaw.split("/");
+    const defaultKey = rutasPermitidas ? rutasPermitidas[0] : "insumos";
+    const mainKey = mainKeyRaw || defaultKey;
+
+    if (rutasPermitidas && !rutasPermitidas.includes(mainKey)) {
+      location.hash = defaultKey;
+      return; // el cambio de hash vuelve a disparar router() con la ruta permitida
+    }
+    if (!mainKeyRaw) {
+      location.hash = mainKey;
+      return;
+    }
+
+    const route = routes[mainKey] || routes.insumos;
+    tabLinks.forEach((a) => a.classList.toggle("active", a.dataset.route === mainKey));
+    await route.view.render(main, subKey);
+    updateSyncStatus();
+  } finally {
+    routerEnCurso = false;
+    if (routerPendiente) {
+      routerPendiente = false;
+      router();
+    }
+  }
+}
+
+function updateOnlineBadge() {
+  const badge = document.getElementById("syncBadge");
+  if (!badge) return;
+  if (navigator.onLine) {
+    badge.textContent = "En línea";
+    badge.classList.add("ok");
+  } else {
+    badge.textContent = "Sin conexión";
+    badge.classList.remove("ok");
+  }
+}
+
+window.addEventListener("hashchange", router);
+window.addEventListener("online", () => {
+  updateOnlineBadge();
+  runSync();
+});
+window.addEventListener("offline", updateOnlineBadge);
+
+window.addEventListener("DOMContentLoaded", () => {
+  document.title = APP_CONFIG.empresaNombre;
+  const appTitle = document.getElementById("appTitle");
+  if (appTitle) appTitle.textContent = APP_CONFIG.empresaNombre;
+  document.documentElement.style.setProperty("--color-primario", APP_CONFIG.colorPrimario);
+  const themeColorMeta = document.querySelector('meta[name="theme-color"]');
+  if (themeColorMeta) themeColorMeta.setAttribute("content", APP_CONFIG.colorPrimario);
+
+  router();
+
+  if ("serviceWorker" in navigator) {
+    navigator.serviceWorker
+      .register("./service-worker.js")
+      .then((reg) => {
+        // Revisa si hay una versión nueva publicada cada vez que la app
+        // vuelve a primer plano (no solo al abrirla desde cero).
+        document.addEventListener("visibilitychange", () => {
+          if (document.visibilityState === "visible") reg.update();
+        });
+      })
+      .catch((err) => {
+        console.warn("No se pudo registrar el service worker:", err);
+      });
+
+    // El service worker usa skipWaiting()+clients.claim(), así que apenas
+    // una versión nueva termina de activarse toma el control de la página
+    // sola. Cuando eso pasa, recargamos para que se vea la versión nueva
+    // sin depender de que el usuario cierre y reabra la app a mano.
+    let recargandoPorActualizacion = false;
+    navigator.serviceWorker.addEventListener("controllerchange", () => {
+      if (recargandoPorActualizacion) return;
+      recargandoPorActualizacion = true;
+      location.reload();
+    });
+  }
+
+  updateOnlineBadge();
+  if (navigator.onLine) runSync();
+});
