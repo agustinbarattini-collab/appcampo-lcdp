@@ -1,4 +1,4 @@
-const CACHE_NAME = "appcampo-lcdp-v2";
+const CACHE_NAME = "appcampo-lcdp-v3";
 const APP_SHELL = [
   "./",
   "./index.html",
