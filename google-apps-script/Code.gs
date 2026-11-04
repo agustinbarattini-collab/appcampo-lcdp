@@ -72,6 +72,7 @@ const SHEETS = {
       // Va al final para no correr de lugar los datos ya cargados en planillas existentes.
       "producto6Nombre", "producto6Cantidad", "producto6Unidad",
       "ordenTrabajoNombre",
+      "producto7Nombre", "producto7Cantidad", "producto7Unidad",
     ],
   },
   avanceSiembra: {
@@ -121,6 +122,7 @@ const SHEETS = {
       "producto4Nombre", "producto4DosisPorHa", "producto4Unidad",
       "producto5Nombre", "producto5DosisPorHa", "producto5Unidad",
       "producto6Nombre", "producto6DosisPorHa", "producto6Unidad",
+      "producto7Nombre", "producto7DosisPorHa", "producto7Unidad",
       "observaciones", "id", "fechaCreacion", "fechaCreacionRegistro", "fechaSincronizacion",
       // Va al final para no correr de lugar los datos ya cargados. "Anulada"
       // cancela la orden sin borrar la fila (borrarla no la saca de los
@@ -170,6 +172,10 @@ const CONFIG_SHEET = { name: "Config", headers: ["clave", "valor"] };
  */
 function setup() {
   const ss = SpreadsheetApp.getActiveSpreadsheet();
+  // "Órdenes de Trabajo" ganó el producto 7 en el medio de la fila de
+  // encabezados: antes de reescribirla se reacomodan las filas ya cargadas
+  // por nombre de columna (no hace nada si ya está en el orden nuevo).
+  migrarOrdenColumnas(SHEETS.ordenTrabajo);
   Object.keys(SHEETS).forEach(function (key) {
     crearPestana(ss, SHEETS[key]);
   });
@@ -313,6 +319,11 @@ function aplicarValidacionOrdenesTrabajo() {
   const headers = SHEETS.ordenTrabajo.headers;
   const FILAS = 499;
 
+  // Si las columnas se corrieron de lugar (ej. al agregar el producto 7), los
+  // desplegables y el gris viejos quedarían en la columna equivocada: se
+  // limpian y se vuelven a armar abajo.
+  hoja.getRange(1, 1, 500, Math.max(hoja.getLastColumn(), headers.length)).clearDataValidations().setBackground(null);
+
   function colDe(campo) {
     return headers.indexOf(campo) + 1;
   }
@@ -337,11 +348,11 @@ function aplicarValidacionOrdenesTrabajo() {
   }
 
   // Productos: desplegable estricto contra Maestros - Insumos, uno por cada
-  // una de las 6 filas de producto posibles.
+  // una de las 7 filas de producto posibles.
   const insumos = nombresDeMaestro(MAESTROS_SHEETS.insumos.name);
   if (insumos.length > 0) {
     const reglaProducto = SpreadsheetApp.newDataValidation().requireValueInList(insumos, true).setAllowInvalid(false).build();
-    for (let i = 1; i <= 6; i++) {
+    for (let i = 1; i <= 7; i++) {
       const col = colDe("producto" + i + "Nombre");
       if (col > 0) hoja.getRange(2, col, FILAS, 1).setDataValidation(reglaProducto);
     }
@@ -363,7 +374,7 @@ function aplicarValidacionOrdenesTrabajo() {
     const unidades = Object.keys(unidadesSet);
     if (unidades.length > 0) {
       const reglaUnidad = SpreadsheetApp.newDataValidation().requireValueInList(unidades, true).setAllowInvalid(false).build();
-      for (let i = 1; i <= 6; i++) {
+      for (let i = 1; i <= 7; i++) {
         const col = colDe("producto" + i + "Unidad");
         if (col > 0) hoja.getRange(2, col, FILAS, 1).setDataValidation(reglaUnidad);
       }
