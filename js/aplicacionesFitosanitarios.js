@@ -12,6 +12,11 @@ const NUM_PRODUCTOS = APP_CONFIG.maxProductos || 6;
 // productos y se guarda sin pedir confirmación por "pendiente".
 const CONTROL_STOCK = APP_CONFIG.controlStockContratista !== false;
 
+// App de un contratista (contratistaFijo: "Nombre" en config.js): el
+// contratista queda fijo (no se elige ni se ve el desplegable) y solo puede
+// borrar lo que todavía no se sincronizó.
+const CONTRATISTA_FIJO = String(APP_CONFIG.contratistaFijo || "").trim().toLowerCase();
+
 function today() {
   return new Date().toISOString().slice(0, 10);
 }
@@ -100,6 +105,15 @@ const aplicacionesFitosanitariosView = {
     ]);
 
     if (contratistas.length === 0 || lotes.length === 0 || insumos.length === 0) {
+      if (CONTRATISTA_FIJO) {
+        container.innerHTML = `
+          <h2>Aplicación de Fitosanitarios</h2>
+          <div class="card empty-state">
+            Todavía no se descargaron los datos.<br/>
+            Abrí la app con conexión a internet y esperá a que diga "Todo sincronizado".
+          </div>`;
+        return;
+      }
       const faltan = [];
       if (contratistas.length === 0) faltan.push("Contratistas");
       if (lotes.length === 0) faltan.push("Lotes");
@@ -306,6 +320,15 @@ const aplicacionesFitosanitariosView = {
 
     fHas.addEventListener("input", actualizarDosisFilas);
 
+    if (CONTRATISTA_FIJO) {
+      const yo = contratistas.find((c) => c.nombre.trim().toLowerCase() === CONTRATISTA_FIJO);
+      if (yo) {
+        fContratista.value = yo.id;
+        fContratista.closest(".field").classList.add("hidden");
+        fContratista.dispatchEvent(new Event("change"));
+      }
+    }
+
     // Sin control de stock los productos no dependen del contratista elegido:
     // se ofrecen desde el principio.
     if (!CONTROL_STOCK) actualizarOpcionesProductos("", null);
@@ -409,10 +432,11 @@ async function renderListadoAplicaciones(container) {
       </div>
       <div style="display:flex; flex-direction:column; align-items:flex-end; gap:6px;">
         <span class="pill ${a.sincronizado ? "sincronizado" : "pendiente"}">${a.sincronizado ? "Sincronizado" : "Pendiente"}</span>
-        <button class="danger" data-id="${a.id}">Borrar</button>
+        ${CONTRATISTA_FIJO && a.sincronizado ? "" : `<button class="danger" data-id="${a.id}">Borrar</button>`}
       </div>
     `;
-    row.querySelector("button").addEventListener("click", async () => {
+    const btnBorrar = row.querySelector("button");
+    if (btnBorrar) btnBorrar.addEventListener("click", async () => {
       if (confirm("¿Borrar este registro?")) {
         await dbDelete(STORE, a.id);
         aplicacionesFitosanitariosView.render(container);

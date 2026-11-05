@@ -7,6 +7,15 @@
 // Reemplazar por un texto random propio (no hace falta recordarlo, solo copiarlo a config.js).
 const SHARED_SECRET = "LCDP2026";
 
+// Accesos LIMITADOS por contratista: cada app de contratista usa su propio
+// token (que va en el config.js de ESA app) y el script solo le devuelve y le
+// deja guardar lo suyo. Formato: "TOKEN": "Nombre exacto en Maestros - Contratistas".
+// Para dar de alta otro contratista: agregar una línea acá, volver a
+// implementar ("Nueva versión") y usar ese token en su app.
+const TOKENS_CONTRATISTAS = {
+  "COR-7kQ2mX9vL4aT": "Corrales",
+};
+
 // Nombre de la empresa: se usa para armar la carpeta de Drive donde se guardan
 // las fotos (ver guardarFotoEnDrive), para que quede clara la separación entre
 // empresas aunque varias usen la misma cuenta de Google.
@@ -565,15 +574,16 @@ function backfillKgOrigen1CargaGranos() {
 function doPost(e) {
   try {
     const body = JSON.parse(e.postData.contents);
-    if (body.token !== SHARED_SECRET) {
+    const acceso = resolverAcceso(body.token);
+    if (!acceso) {
       return respond({ ok: false, error: "token inválido" });
     }
 
     if (body.accion === "leerMaestros") {
-      return responderMaestros();
+      return responderMaestros(acceso);
     }
     if (body.accion === "leerRegistros") {
-      return responderRegistros();
+      return responderRegistros(acceso);
     }
 
     const cfg = SHEETS[body.tipo];
@@ -587,6 +597,14 @@ function doPost(e) {
       sheet = ss.getSheetByName(cfg.name);
     }
     const r = body.registro || {};
+    if (acceso.contratista) {
+      // Un contratista solo puede cargar Fitosanitarios, y siempre a su nombre
+      // (no importa lo que mande la app).
+      if (body.tipo !== "aplicacionFitosanitaria") {
+        return respond({ ok: false, error: "no autorizado" });
+      }
+      r.contratistaNombre = acceso.contratista;
+    }
     let fotoUrl = "";
     if (r.fotoBase64) {
       fotoUrl = guardarFotoEnDrive(r.fotoBase64, body.tipo, r.id);
@@ -641,25 +659,63 @@ function obtenerOCrearCarpeta(nombre, padre) {
   return existentes.hasNext() ? existentes.next() : base.createFolder(nombre);
 }
 
-function responderMaestros() {
+// Quién es el que llama según el token: administrador (todo) o un contratista
+// (solo lo suyo). Devuelve null si el token no corresponde a nadie.
+function resolverAcceso(token) {
+  if (token === SHARED_SECRET) return { admin: true };
+  if (token && Object.prototype.hasOwnProperty.call(TOKENS_CONTRATISTAS, token)) {
+    return { contratista: TOKENS_CONTRATISTAS[token] };
+  }
+  return null;
+}
+
+function mismoNombre(a, b) {
+  return String(a).trim().toLowerCase() === String(b).trim().toLowerCase();
+}
+
+// Maestros que necesita la app de un contratista para completar Fitosanitarios:
+// lotes e insumos completos, y de contratistas solo él mismo. Proveedores,
+// siembra, silos, corredores, campañas y galpones no se envían.
+const MAESTROS_PARA_CONTRATISTA = ["lotes", "insumos", "contratistas"];
+
+// Tipos de registro que ve un contratista (solo las filas con su nombre).
+const REGISTROS_PARA_CONTRATISTA = ["ordenTrabajo", "aplicacionFitosanitaria", "movimientoInsumo"];
+
+function responderMaestros(acceso) {
   const ss = SpreadsheetApp.getActiveSpreadsheet();
   const maestros = {};
   Object.keys(MAESTROS_SHEETS).forEach(function (key) {
     const cfg = MAESTROS_SHEETS[key];
+    if (acceso && acceso.contratista && MAESTROS_PARA_CONTRATISTA.indexOf(key) === -1) {
+      maestros[key] = [];
+      return;
+    }
     const sheet = ss.getSheetByName(cfg.name);
-    maestros[key] = sheet ? leerPestana(sheet, cfg.headers) : [];
+    let filas = sheet ? leerPestana(sheet, cfg.headers) : [];
+    if (acceso && acceso.contratista && key === "contratistas") {
+      filas = filas.filter(function (f) { return mismoNombre(f.nombre, acceso.contratista); });
+    }
+    maestros[key] = filas;
   });
   const resetVersion = Number(leerValorConfig("resetVersion")) || 0;
   return respond({ ok: true, maestros: maestros, resetVersion: resetVersion });
 }
 
-function responderRegistros() {
+function responderRegistros(acceso) {
   const ss = SpreadsheetApp.getActiveSpreadsheet();
   const registros = {};
   Object.keys(SHEETS).forEach(function (key) {
     const cfg = SHEETS[key];
+    if (acceso && acceso.contratista && REGISTROS_PARA_CONTRATISTA.indexOf(key) === -1) {
+      registros[key] = [];
+      return;
+    }
     const sheet = ss.getSheetByName(cfg.name);
-    registros[key] = sheet ? leerPestana(sheet, cfg.headers) : [];
+    let filas = sheet ? leerPestana(sheet, cfg.headers) : [];
+    if (acceso && acceso.contratista) {
+      filas = filas.filter(function (f) { return mismoNombre(f.contratistaNombre, acceso.contratista); });
+    }
+    registros[key] = filas;
   });
   return respond({ ok: true, registros: registros });
 }

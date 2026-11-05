@@ -1,6 +1,11 @@
 import { dbGetAll } from "./db.js";
 import { getOrdenesConEstado } from "./stockUtils.js";
 import { formatearFechaCorta } from "./ui.js";
+import { APP_CONFIG } from "./config.js";
+
+// App de un contratista (contratistaFijo en config.js): solo trae sus órdenes,
+// así que no tiene sentido el filtro por contratista.
+const ES_APP_CONTRATISTA = !!APP_CONFIG.contratistaFijo;
 
 // Órdenes de Trabajo pasó a ser de solo lectura (2026-08-17): las carga el
 // asesor directo en la Sheet ("Órdenes de Trabajo"), no hay alta desde acá.
@@ -23,14 +28,14 @@ const ordenesTrabajoView = {
         <h2>Órdenes de Trabajo</h2>
         <div class="card empty-state">
           Todavía no hay ninguna Orden de Trabajo cargada en la planilla.<br/>
-          Las carga el asesor directo en la pestaña "Órdenes de Trabajo" de la Sheet — tocá "Actualizar desde Sheets" en Maestros para traerlas.
+          ${ES_APP_CONTRATISTA ? "Cuando te carguen una, aparece sola al abrir la app con conexión a internet." : 'Las carga el asesor directo en la pestaña "Órdenes de Trabajo" de la Sheet — tocá "Actualizar desde Sheets" en Maestros para traerlas.'}
         </div>`;
       return;
     }
 
     container.innerHTML = `
       <h2>Órdenes de Trabajo</h2>
-      <div class="card">
+      <div class="card${ES_APP_CONTRATISTA ? " hidden" : ""}">
         <label style="font-size:0.8rem;">Ver órdenes de</label>
         <select id="fContratistaFiltro">
           <option value="">Todos los contratistas</option>
