@@ -87,9 +87,11 @@ function optsOtrosInsumos(insumos, idsExcluidos) {
 
 // Solo se ofrecen las órdenes no completadas — una vez que están todos los
 // lotes aplicados no tiene sentido seguir eligiéndolas acá.
-function optsOrdenes(ordenesConEstado) {
+// loteId (opcional): deja solo las órdenes que incluyen ese lote.
+function optsOrdenes(ordenesConEstado, loteId = "") {
   return ordenesConEstado
     .filter((o) => o.estado !== "completada")
+    .filter((o) => !loteId || o.lotes.some((l) => l.loteId === loteId))
     .map((o) => `<option value="${o.id}">${o.nombre} — ${o.contratistaNombre}${o.fechaLimite ? " (plazo " + formatearFechaCorta(o.fechaLimite) + ")" : ""}</option>`)
     .join("");
 }
@@ -127,11 +129,32 @@ const aplicacionesFitosanitariosView = {
       return;
     }
 
+    // Lotes que están en alguna orden todavía no completada: son los que
+    // sirven para filtrar el desplegable de órdenes.
+    const lotesConOrden = new Map();
+    for (const o of ordenesConEstado) {
+      if (o.estado === "completada") continue;
+      for (const l of o.lotes) lotesConOrden.set(l.loteId, l.loteNombre);
+    }
+    const lotesFiltro = [...lotesConOrden.entries()].sort((a, b) => String(a[1]).localeCompare(String(b[1])));
+
     container.innerHTML = `
       <h2>Aplicación de Fitosanitarios</h2>
       ${CONTROL_STOCK ? '<div class="card" id="cuentaCard"></div>' : ""}
       <div class="card">
         <form id="formAplicacion">
+          ${
+            lotesFiltro.length
+              ? `<div class="field">
+            <label>Filtrar órdenes por lote</label>
+            <select id="fLoteFiltroOrden">
+              <option value="">Todos los lotes</option>
+              ${lotesFiltro.map(([id, nombre]) => `<option value="${id}">${nombre}</option>`).join("")}
+            </select>
+            <div class="muted hidden" id="filtroLoteInfo"></div>
+          </div>`
+              : ""
+          }
           <div class="field">
             <label>Orden de Trabajo</label>
             <select id="fOrden">
@@ -295,6 +318,34 @@ const aplicacionesFitosanitariosView = {
       fila.querySelector(".fProductoRow").addEventListener("change", () => actualizarDosisFila(fila, i));
     });
 
+    // Filtro por lote: el desplegable de órdenes muestra solo las que incluyen
+    // ese lote, y el lote queda elegido en el formulario.
+    const fLoteFiltroOrden = container.querySelector("#fLoteFiltroOrden");
+    const filtroLoteInfo = container.querySelector("#filtroLoteInfo");
+    function aplicarLoteFiltro() {
+      if (fLoteFiltroOrden && fLoteFiltroOrden.value && !fLote.value) {
+        if ([...fLote.options].some((o) => o.value === fLoteFiltroOrden.value)) fLote.value = fLoteFiltroOrden.value;
+      }
+    }
+    if (fLoteFiltroOrden) {
+      fLoteFiltroOrden.addEventListener("change", () => {
+        const loteId = fLoteFiltroOrden.value;
+        fOrden.innerHTML =
+          '<option value="">Sin orden (cargar manualmente)</option>' + optsOrdenes(ordenesConEstado, loteId);
+        fOrden.value = "";
+        fOrden.dispatchEvent(new Event("change"));
+        if (loteId) {
+          const cantidad = fOrden.options.length - 1;
+          filtroLoteInfo.textContent = cantidad
+            ? `${cantidad} ${cantidad === 1 ? "orden pendiente" : "órdenes pendientes"} para este lote.`
+            : "No hay órdenes pendientes para este lote.";
+          filtroLoteInfo.classList.remove("hidden");
+        } else {
+          filtroLoteInfo.classList.add("hidden");
+        }
+      });
+    }
+
     fOrden.addEventListener("change", () => {
       const orden = ordenActiva();
       fContratista.disabled = !!orden;
@@ -308,6 +359,7 @@ const aplicacionesFitosanitariosView = {
       // para que el contratista cargue lo que realmente usó de esta orden.
       filas.forEach((fila) => (fila.querySelector(".fCantidadRow").value = ""));
       actualizarDosisFilas();
+      aplicarLoteFiltro();
     });
 
     fContratista.addEventListener("change", () => {
