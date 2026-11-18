@@ -1,4 +1,4 @@
-const CACHE_NAME = "appcampo-lcdp-v14";
+const CACHE_NAME = "appcampo-lcdp-v15";
 const APP_SHELL = [
   "./",
   "./index.html",
@@ -14,6 +14,8 @@ const APP_SHELL = [
   "./js/aplicacionesFitosanitarios.js",
   "./js/siembra.js",
   "./js/ordenesTrabajo.js",
+  "./js/geoLotes.js",
+  "./js/lotesGeo.js",
   "./js/stockUtils.js",
   "./js/ui.js",
   "./icons/icon-192.png",
