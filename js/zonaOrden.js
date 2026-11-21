@@ -11,6 +11,7 @@ import { APP_CONFIG } from "./config.js";
 import { cargarGeoLotes, normalizar } from "./geoLotes.js";
 import { dbGetAll, dbPut } from "./db.js";
 import { toast } from "./ui.js";
+import { subirZonasPendientes } from "./sync.js";
 
 // ---------------------------------------------------------------------------
 // Modo edición: solo el celular de quien marca zonas. Se activa abriendo la app
@@ -729,10 +730,25 @@ async function montarZonaEnOrden(contenedor, orden, { editable = false, onCambio
   }
 
   contenedor.querySelector('[data-zn="ver"]')?.addEventListener("click", () => abrirMapaZona(orden, { editar: false }));
-  contenedor.querySelector('[data-zn="subir"]')?.addEventListener("click", () => {
-    toast("Subiendo la zona…");
-    window.dispatchEvent(new Event("appcampo-sync-now"));
-    redibujarLuego(onCambio);
+  contenedor.querySelector('[data-zn="subir"]')?.addEventListener("click", async (e) => {
+    // Sube directo (sin pasar por la sincronización general) y avisa qué pasó.
+    const boton = e.currentTarget;
+    boton.disabled = true;
+    boton.textContent = "Subiendo…";
+    try {
+      const r = await subirZonasPendientes();
+      if (r.ocupado) {
+        toast("Ya se está subiendo, esperá unos segundos.", 3500);
+      } else {
+        const mio = r.resultados.find((x) => x.nombre === orden.nombre);
+        if (mio && mio.ok) toast("✔ Zona subida a la planilla", 3500);
+        else toast("No se pudo subir: " + (mio ? mio.mensaje : "sin respuesta"), 6000);
+      }
+    } finally {
+      // Actualiza el contador de pendientes de arriba y vuelve a dibujar la orden.
+      window.dispatchEvent(new Event("appcampo-sync-now"));
+      if (onCambio) onCambio();
+    }
   });
   contenedor.querySelector('[data-zn="editar"]')?.addEventListener("click", () =>
     abrirMapaZona(orden, {

@@ -119,49 +119,90 @@ async function contarPendientes() {
   return total;
 }
 
+// Tiempo máximo de espera por llamada a la planilla. Sin esto, una llamada colgada
+// por mala señal dejaba "syncing" trabado en true y TODAS las sincronizaciones
+// siguientes salían sin hacer nada (ni avisar).
+const TIEMPO_MAX_LLAMADA_MS = 90000;
+
 async function llamarBackend(body) {
-  const res = await fetch(APP_CONFIG.sheetsWebAppUrl, {
-    method: "POST",
-    headers: { "Content-Type": "text/plain;charset=utf-8" },
-    body: JSON.stringify({ token: APP_CONFIG.sheetsSyncToken, ...body }),
-  });
-  return res.json();
+  const control = new AbortController();
+  const timer = setTimeout(() => control.abort(), TIEMPO_MAX_LLAMADA_MS);
+  try {
+    const res = await fetch(APP_CONFIG.sheetsWebAppUrl, {
+      method: "POST",
+      headers: { "Content-Type": "text/plain;charset=utf-8" },
+      body: JSON.stringify({ token: APP_CONFIG.sheetsSyncToken, ...body }),
+      signal: control.signal,
+    });
+    return await res.json();
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 // La zona a aplicar de una orden (cuando no va todo el lote) se marca desde la
 // app sobre una orden que YA existe en la Sheet, así que no se manda como un
 // registro nuevo (duplicaría la fila): el backend actualiza la columna "zona"
 // de la fila con ese nombre.
+let subiendoZonas = false;
+
+// Devuelve { ocupado, resultados: [{ nombre, ok, mensaje }] } para poder avisarle a
+// quien toca "Subir ahora" qué pasó. No depende del candado de syncAll().
 async function subirZonasPendientes() {
-  const ordenes = await dbGetAll("ordenesTrabajo");
-  for (const o of ordenes.filter((x) => x.zonaPendiente)) {
-    const zonaTxt = o.zona && o.zona.length ? JSON.stringify(o.zona) : "";
-    try {
-      const data = await llamarBackend({ accion: "guardarZonaOrden", nombre: o.nombre, zona: zonaTxt });
-      // Se relee por si la zona se volvió a editar mientras se subía.
-      const fresca = (await dbGetAll("ordenesTrabajo")).find((x) => x.id === o.id);
-      const frescaTxt = fresca && fresca.zona && fresca.zona.length ? JSON.stringify(fresca.zona) : "";
-      if (!data.ok && !data.noEncontrada) {
-        // El servidor la rechazó: queda pendiente y se guarda el motivo para mostrarlo en la orden.
-        console.warn("La planilla rechazó la zona de la orden:", o.nombre, data.error);
+  if (subiendoZonas) return { ocupado: true, resultados: [] };
+  subiendoZonas = true;
+  const resultados = [];
+  try {
+    const ordenes = await dbGetAll("ordenesTrabajo");
+    for (const o of ordenes.filter((x) => x.zonaPendiente)) {
+      const zonaTxt = o.zona && o.zona.length ? JSON.stringify(o.zona) : "";
+      const guardarError = async (mensaje) => {
+        const fresca = (await dbGetAll("ordenesTrabajo")).find((x) => x.id === o.id);
         if (fresca) {
-          fresca.zonaError = String(data.error || "la planilla la rechazó");
+          fresca.zonaError = mensaje;
           await dbPut("ordenesTrabajo", fresca);
         }
-        continue;
+      };
+      try {
+        const data = await llamarBackend({ accion: "guardarZonaOrden", nombre: o.nombre, zona: zonaTxt });
+        // Se relee por si la zona se volvió a editar mientras se subía.
+        const fresca = (await dbGetAll("ordenesTrabajo")).find((x) => x.id === o.id);
+        const frescaTxt = fresca && fresca.zona && fresca.zona.length ? JSON.stringify(fresca.zona) : "";
+        if (!data.ok && !data.noEncontrada) {
+          // El servidor la rechazó: queda pendiente y se guarda el motivo para mostrarlo en la orden.
+          const mensaje = String(data.error || "la planilla la rechazó");
+          console.warn("La planilla rechazó la zona de la orden:", o.nombre, mensaje);
+          await guardarError(mensaje);
+          resultados.push({ nombre: o.nombre, ok: false, mensaje });
+          continue;
+        }
+        if (data.noEncontrada) {
+          console.warn("La orden no está en la planilla, la zona queda solo en este celular:", o.nombre);
+        }
+        if (fresca && frescaTxt === zonaTxt) {
+          fresca.zonaPendiente = false;
+          fresca.zonaError = data.noEncontrada ? "esa orden no está en la planilla (la zona queda solo en este celular)" : "";
+          await dbPut("ordenesTrabajo", fresca);
+        }
+        resultados.push({
+          nombre: o.nombre,
+          ok: !data.noEncontrada,
+          mensaje: data.noEncontrada ? "esa orden no está en la planilla" : "",
+        });
+      } catch (err) {
+        const mensaje =
+          err && err.name === "AbortError"
+            ? "la planilla tardó demasiado en responder (probá con mejor señal)"
+            : "no hay conexión con la planilla";
+        console.warn("No se pudo subir la zona de la orden:", o.nombre, err);
+        await guardarError(mensaje);
+        resultados.push({ nombre: o.nombre, ok: false, mensaje });
       }
-      if (data.noEncontrada) {
-        console.warn("La orden no está en la planilla, la zona queda solo en este celular:", o.nombre);
-      }
-      if (fresca && frescaTxt === zonaTxt) {
-        fresca.zonaPendiente = false;
-        fresca.zonaError = data.noEncontrada ? "esa orden no está en la planilla (la zona queda solo en este celular)" : "";
-        await dbPut("ordenesTrabajo", fresca);
-      }
-    } catch (err) {
-      console.warn("No se pudo subir la zona de la orden (sin conexión real o error de red):", o.nombre, err);
     }
+  } finally {
+    subiendoZonas = false;
   }
+  return { ocupado: false, resultados };
 }
 
 async function syncAll(onProgress) {
@@ -773,4 +814,4 @@ async function pullAll() {
   }
 }
 
-export { syncAll, contarPendientes, importarMaestros, pullAll };
+export { syncAll, contarPendientes, importarMaestros, pullAll, subirZonasPendientes };
