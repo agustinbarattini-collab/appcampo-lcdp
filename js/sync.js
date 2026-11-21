@@ -144,6 +144,16 @@ async function llamarBackend(body) {
 // app sobre una orden que YA existe en la Sheet, así que no se manda como un
 // registro nuevo (duplicaría la fila): el backend actualiza la columna "zona"
 // de la fila con ese nombre.
+// Texto claro de por qué falló una llamada a la planilla (para mostrarlo en pantalla).
+function describirErrorDeRed(err) {
+  const detalle = err && (err.message || err.name) ? ` [${err.name || "Error"}: ${err.message || ""}]` : "";
+  if (err && err.name === "AbortError") return "la planilla tardó demasiado en responder (probá con mejor señal)";
+  if (typeof navigator !== "undefined" && navigator.onLine === false) return "el celular no tiene internet en este momento";
+  if (err instanceof SyntaxError) return "la planilla respondió algo inesperado (no es una respuesta válida)" + detalle;
+  if (err instanceof TypeError) return "no se pudo conectar con la planilla (error de red)" + detalle;
+  return "error inesperado" + detalle;
+}
+
 let subiendoZonas = false;
 
 // Devuelve { ocupado, resultados: [{ nombre, ok, mensaje }] } para poder avisarle a
@@ -190,10 +200,7 @@ async function subirZonasPendientes() {
           mensaje: data.noEncontrada ? "esa orden no está en la planilla" : "",
         });
       } catch (err) {
-        const mensaje =
-          err && err.name === "AbortError"
-            ? "la planilla tardó demasiado en responder (probá con mejor señal)"
-            : "no hay conexión con la planilla";
+        const mensaje = describirErrorDeRed(err);
         console.warn("No se pudo subir la zona de la orden:", o.nombre, err);
         await guardarError(mensaje);
         resultados.push({ nombre: o.nombre, ok: false, mensaje });
@@ -814,4 +821,4 @@ async function pullAll() {
   }
 }
 
-export { syncAll, contarPendientes, importarMaestros, pullAll, subirZonasPendientes };
+export { syncAll, contarPendientes, importarMaestros, pullAll, subirZonasPendientes, describirErrorDeRed };
