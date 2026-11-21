@@ -2,6 +2,7 @@ import { dbGetAll, dbPut, dbDelete, uid } from "./db.js";
 import { getCuentaContratistas, getOrdenesConEstado } from "./stockUtils.js";
 import { toast, formatearFechaCorta, parseNumero } from "./ui.js";
 import { APP_CONFIG } from "./config.js";
+import { montarZonaEnOrden } from "./zonaOrden.js";
 
 const STORE = "aplicacionesFitosanitarios";
 const NUM_PRODUCTOS = APP_CONFIG.maxProductos || 6;
@@ -170,6 +171,7 @@ const aplicacionesFitosanitariosView = {
               ${optsOrdenes(ordenesConEstado)}
             </select>
             <div class="muted">Si elegís una orden, se completan solos el contratista, el lote y los productos planificados con su dosis.</div>
+            <div class="hidden" id="zonaOrdenFila"></div>
           </div>
           <div class="field">
             <label>Contratista</label>
@@ -438,6 +440,13 @@ const aplicacionesFitosanitariosView = {
       renderCuentaCard(container, cuenta, fContratista.value, contratista ? contratista.nombre : "");
       poblarLoteSegunOrden(orden);
       actualizarHasSugerida(orden);
+      // Si la orden tiene una zona marcada (no va todo el lote), se puede ver en el mapa.
+      const zonaFila = container.querySelector("#zonaOrdenFila");
+      if (orden) montarZonaEnOrden(zonaFila, orden, { editable: false });
+      else {
+        zonaFila.innerHTML = "";
+        zonaFila.classList.add("hidden");
+      }
       actualizarOpcionesProductos(fContratista.value, orden);
       // Nueva orden: se limpia lo que se haya tipeado antes de "total usado"
       // para que el contratista cargue lo que realmente usó de esta orden.

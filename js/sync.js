@@ -79,6 +79,8 @@ function flattenOrdenTrabajo(r) {
     out[`producto${i + 1}Unidad`] = p.unidad;
   });
   out.estado = r.anulada ? "Anulada" : "";
+  out.zona = r.zona && r.zona.length ? JSON.stringify(r.zona) : "";
+  out.zonaPendiente = undefined;
   out.anulada = undefined;
   out.lotes = undefined;
   out.productosPlanificados = undefined;
@@ -111,6 +113,9 @@ async function contarPendientes() {
     const items = await dbGetAll(store);
     total += items.filter((r) => !r.sincronizado).length;
   }
+  // Zonas a aplicar marcadas en la app que todavía no se subieron a la Sheet.
+  const ordenes = await dbGetAll("ordenesTrabajo");
+  total += ordenes.filter((o) => o.zonaPendiente).length;
   return total;
 }
 
@@ -121,6 +126,36 @@ async function llamarBackend(body) {
     body: JSON.stringify({ token: APP_CONFIG.sheetsSyncToken, ...body }),
   });
   return res.json();
+}
+
+// La zona a aplicar de una orden (cuando no va todo el lote) se marca desde la
+// app sobre una orden que YA existe en la Sheet, así que no se manda como un
+// registro nuevo (duplicaría la fila): el backend actualiza la columna "zona"
+// de la fila con ese nombre.
+async function subirZonasPendientes() {
+  const ordenes = await dbGetAll("ordenesTrabajo");
+  for (const o of ordenes.filter((x) => x.zonaPendiente)) {
+    const zonaTxt = o.zona && o.zona.length ? JSON.stringify(o.zona) : "";
+    try {
+      const data = await llamarBackend({ accion: "guardarZonaOrden", nombre: o.nombre, zona: zonaTxt });
+      if (!data.ok && !data.noEncontrada) {
+        console.warn("La planilla rechazó la zona de la orden:", o.nombre, data.error);
+        continue;
+      }
+      if (data.noEncontrada) {
+        console.warn("La orden no está en la planilla, la zona queda solo en este celular:", o.nombre);
+      }
+      // Se relee por si la zona se volvió a editar mientras se subía.
+      const fresca = (await dbGetAll("ordenesTrabajo")).find((x) => x.id === o.id);
+      const frescaTxt = fresca && fresca.zona && fresca.zona.length ? JSON.stringify(fresca.zona) : "";
+      if (fresca && frescaTxt === zonaTxt) {
+        fresca.zonaPendiente = false;
+        await dbPut("ordenesTrabajo", fresca);
+      }
+    } catch (err) {
+      console.warn("No se pudo subir la zona de la orden (sin conexión real o error de red):", o.nombre, err);
+    }
+  }
 }
 
 async function syncAll(onProgress) {
@@ -157,6 +192,7 @@ async function syncAll(onProgress) {
         if (onProgress) await onProgress();
       }
     }
+    await subirZonasPendientes();
   } finally {
     syncing = false;
   }
@@ -644,8 +680,22 @@ async function unflattenOrdenTrabajo(fila) {
   // pintada de gris en la Sheet) — para una orden realmente nueva, casi
   // siempre va a venir vacía, así que hace falta generar un id acá mismo en
   // vez de asumir que la fila trae uno.
+  // Zona a aplicar: viene como texto JSON en la columna "zona". Si en este
+  // celular hay una zona marcada que todavía no se subió, esa manda (no se
+  // pisa con lo que haya en la Sheet hasta que se suba).
+  let zona = [];
+  try {
+    const crudo = typeof fila.zona === "string" ? (fila.zona.trim() ? JSON.parse(fila.zona) : []) : fila.zona;
+    if (Array.isArray(crudo)) zona = crudo;
+  } catch (_) {
+    zona = [];
+  }
+  const zonaPendiente = !!(existente && existente.zonaPendiente);
+  if (zonaPendiente) zona = existente.zona || [];
   return {
     id: existente ? existente.id : fila.id || uid(),
+    zona,
+    zonaPendiente,
     nombre: nombreOrden,
     contratistaId,
     contratistaNombre: String(fila.contratistaNombre || "").trim(),

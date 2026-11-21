@@ -137,6 +137,11 @@ const SHEETS = {
       // cancela la orden sin borrar la fila (borrarla no la saca de los
       // celulares); vacío o "Activa" la deja vigente.
       "estado",
+      // Zona a aplicar dentro de los lotes de la orden (cuando NO va todo el
+      // lote): texto JSON con los polígonos [[lng,lat],...] que se marcan desde
+      // la app (ver guardarZonaOrden). La llena el sistema, no hace falta tocarla;
+      // vacía = va todo el lote.
+      "zona",
     ],
   },
 };
@@ -400,7 +405,7 @@ function aplicarValidacionOrdenesTrabajo() {
 
   // Columnas que llena el sistema, no el asesor — se pintan de gris para
   // que se note a simple vista que no hay que tocarlas.
-  ["id", "fechaCreacion", "fechaCreacionRegistro", "fechaSincronizacion"].forEach(function (campo) {
+  ["id", "fechaCreacion", "fechaCreacionRegistro", "fechaSincronizacion", "zona"].forEach(function (campo) {
     const col = colDe(campo);
     if (col > 0) hoja.getRange(1, col, 500, 1).setBackground("#e8e8e8");
   });
@@ -586,6 +591,13 @@ function doPost(e) {
       return responderRegistros(acceso);
     }
 
+    if (body.accion === "guardarZonaOrden") {
+      if (acceso.contratista) {
+        return respond({ ok: false, error: "no autorizado" });
+      }
+      return guardarZonaOrden(body.nombre, body.zona);
+    }
+
     const cfg = SHEETS[body.tipo];
     if (!cfg) {
       return respond({ ok: false, error: "tipo desconocido: " + body.tipo });
@@ -622,6 +634,39 @@ function doPost(e) {
   } catch (err) {
     return respond({ ok: false, error: String(err) });
   }
+}
+
+/**
+ * Guarda la zona a aplicar de una orden (la marca quien administra desde la app,
+ * sobre una orden que YA está en la planilla). Busca la fila por el nombre de la
+ * orden y escribe el JSON en la columna "zona"; zona vacía = va todo el lote.
+ * Si la columna todavía no existe en la pestaña, la crea al final.
+ */
+function guardarZonaOrden(nombre, zona) {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const cfg = SHEETS.ordenTrabajo;
+  const hoja = ss.getSheetByName(cfg.name);
+  if (!hoja) return respond({ ok: false, noEncontrada: true, error: 'No existe la pestaña "' + cfg.name + '".' });
+  const texto = zona === undefined || zona === null ? "" : String(zona);
+  if (texto.length > 45000) return respond({ ok: false, error: "la zona es demasiado grande" });
+  const colNombre = cfg.headers.indexOf("nombre") + 1;
+  const colZona = cfg.headers.indexOf("zona") + 1;
+  if (hoja.getMaxColumns() < colZona) hoja.insertColumnsAfter(hoja.getMaxColumns(), colZona - hoja.getMaxColumns());
+  if (hoja.getRange(1, colZona).getValue() !== "zona") hoja.getRange(1, colZona).setValue("zona");
+  const buscado = String(nombre || "").trim().toLowerCase();
+  const lastRow = hoja.getLastRow();
+  let filas = 0;
+  if (buscado && lastRow >= 2) {
+    const nombres = hoja.getRange(2, colNombre, lastRow - 1, 1).getValues();
+    for (let i = 0; i < nombres.length; i++) {
+      if (String(nombres[i][0]).trim().toLowerCase() === buscado) {
+        hoja.getRange(i + 2, colZona).setValue(texto);
+        filas++;
+      }
+    }
+  }
+  if (filas === 0) return respond({ ok: false, noEncontrada: true, error: "orden no encontrada: " + nombre });
+  return respond({ ok: true, filas: filas });
 }
 
 // Carpeta de Drive por tipo de registro, dentro de "App de Campo - Fotos/<EMPRESA_NOMBRE>/".
