@@ -138,18 +138,24 @@ async function subirZonasPendientes() {
     const zonaTxt = o.zona && o.zona.length ? JSON.stringify(o.zona) : "";
     try {
       const data = await llamarBackend({ accion: "guardarZonaOrden", nombre: o.nombre, zona: zonaTxt });
+      // Se relee por si la zona se volvió a editar mientras se subía.
+      const fresca = (await dbGetAll("ordenesTrabajo")).find((x) => x.id === o.id);
+      const frescaTxt = fresca && fresca.zona && fresca.zona.length ? JSON.stringify(fresca.zona) : "";
       if (!data.ok && !data.noEncontrada) {
+        // El servidor la rechazó: queda pendiente y se guarda el motivo para mostrarlo en la orden.
         console.warn("La planilla rechazó la zona de la orden:", o.nombre, data.error);
+        if (fresca) {
+          fresca.zonaError = String(data.error || "la planilla la rechazó");
+          await dbPut("ordenesTrabajo", fresca);
+        }
         continue;
       }
       if (data.noEncontrada) {
         console.warn("La orden no está en la planilla, la zona queda solo en este celular:", o.nombre);
       }
-      // Se relee por si la zona se volvió a editar mientras se subía.
-      const fresca = (await dbGetAll("ordenesTrabajo")).find((x) => x.id === o.id);
-      const frescaTxt = fresca && fresca.zona && fresca.zona.length ? JSON.stringify(fresca.zona) : "";
       if (fresca && frescaTxt === zonaTxt) {
         fresca.zonaPendiente = false;
+        fresca.zonaError = data.noEncontrada ? "esa orden no está en la planilla (la zona queda solo en este celular)" : "";
         await dbPut("ordenesTrabajo", fresca);
       }
     } catch (err) {
@@ -696,6 +702,7 @@ async function unflattenOrdenTrabajo(fila) {
     id: existente ? existente.id : fila.id || uid(),
     zona,
     zonaPendiente,
+    zonaError: zonaPendiente ? existente.zonaError || "" : "",
     nombre: nombreOrden,
     contratistaId,
     contratistaNombre: String(fila.contratistaNombre || "").trim(),
