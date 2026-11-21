@@ -652,6 +652,11 @@ function guardarZonaOrden(nombre, zona) {
   const colNombre = cfg.headers.indexOf("nombre") + 1;
   const colZona = cfg.headers.indexOf("zona") + 1;
   if (hoja.getMaxColumns() < colZona) hoja.insertColumnsAfter(hoja.getMaxColumns(), colZona - hoja.getMaxColumns());
+  // Si la columna tiene una validación de datos vieja (por ejemplo un desplegable que
+  // quedó de una versión anterior de las columnas), escribir cualquier texto fallaba al
+  // final del script con un error que no se podía atrapar. Se limpia la validación de
+  // esta columna: "zona" la llena el sistema, no hace falta que valide nada.
+  hoja.getRange(1, colZona, Math.max(hoja.getMaxRows(), 2), 1).clearDataValidations();
   if (hoja.getRange(1, colZona).getValue() !== "zona") hoja.getRange(1, colZona).setValue("zona");
   const buscado = String(nombre || "").trim().toLowerCase();
   const lastRow = hoja.getLastRow();
@@ -666,6 +671,9 @@ function guardarZonaOrden(nombre, zona) {
     }
   }
   if (filas === 0) return respond({ ok: false, noEncontrada: true, error: "orden no encontrada: " + nombre });
+  // Fuerza a Google a aplicar la escritura ACÁ, dentro del try de doPost: si algo la
+  // rechaza, vuelve como mensaje legible y no como una página de error.
+  SpreadsheetApp.flush();
   return respond({ ok: true, filas: filas });
 }
 
