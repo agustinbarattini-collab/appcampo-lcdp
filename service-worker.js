@@ -1,4 +1,4 @@
-const CACHE_NAME = "appcampo-lcdp-v21";
+const CACHE_NAME = "appcampo-lcdp-v22";
 const APP_SHELL = [
   "./",
   "./index.html",
@@ -8,6 +8,7 @@ const APP_SHELL = [
   "./js/db.js",
   "./js/app.js",
   "./js/sync.js",
+  "./js/cambios.js",
   "./js/maestros.js",
   "./js/maestrosHub.js",
   "./js/movimientosInsumos.js",
